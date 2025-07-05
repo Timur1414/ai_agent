@@ -1,0 +1,4 @@
+torch~=2.7.1
+openai~=1.93.0
+python-dotenv~=1.1.1
+numpy~=2.3.1

@@ -4,8 +4,6 @@ import random
 import torch
 from openai import OpenAI
 from dotenv import load_dotenv
-from pyexpat.errors import messages
-
 import prompts
 import logging
 
@@ -23,7 +21,8 @@ class BaseNeuroObject(ABC):
     def __init__(self):
         load_dotenv()
         api_key = os.environ.get('OPENROUTER_API')
-        url = 'http://127.0.0.1:11434/v1'
+        url = os.environ.get('URL')
+        # url = 'http://127.0.0.1:11434/v1'
         # url = 'https://openrouter.ai/api/v1'
         self.client = OpenAI(
             base_url=url,
@@ -65,8 +64,9 @@ class Player(BaseNeuroObject):
         self.role = role
         self.bot = bot
         self.name = name
-        self.send_message(prompts.START + prompts.ROLES, role='system')
-        self.send_message(prompts.BOT_RULES.format(name=self.name.upper(), role=self.role), role='system')
+        if bot:
+            self.send_message(prompts.START + prompts.ROLES, role='system')
+            self.send_message(prompts.BOT_RULES.format(name=self.name.upper(), role=self.role), role='system')
 
     def say_to_all(self, message: str):
         print(f'Говорит {self.name}: {message}')
@@ -95,16 +95,19 @@ class Player(BaseNeuroObject):
         )
 
     def introduce(self):
-        answer = self.send_message(
-            'Теперь представься, расскажи о себе другим игрокам так, чтобы они не узнали твою роль, но при этом, '
-            'чтобы они доверяли тебе. Расскажи ту информацию о своей личности, которую считаешь нужной.', presence_penalty=0.7, temperature=0.2)
+        if self.bot:
+            answer = self.send_message(
+                'Теперь представься, расскажи о себе другим игрокам так, чтобы они не узнали твою роль, но при этом, '
+                'чтобы они доверяли тебе. Расскажи ту информацию о своей личности, которую считаешь нужной.', presence_penalty=0.7, temperature=0.2)
+        else:
+            answer = input('Представьтесь и расскажите о себе:\n')
         self.say_to_all(answer)
 
-    def do_step(self):
-        pass
-
-    def vote(self):
-        pass
+    def do_step(self, message, **kwargs) -> str:
+        if self.bot:
+            return self.send_message(message, **kwargs)
+        else:
+            return input()
 
     def __str__(self):
         return f'Я {self.name}. Моя роль - {self.role}'
@@ -155,6 +158,8 @@ class Game(BaseNeuroObject):
                 'content': message,
             }
         )
+        if not player.bot:
+            print(message)
 
     def say_to_all(self, message: str):
         for player in self.players:
@@ -168,9 +173,11 @@ class Game(BaseNeuroObject):
             player = None
             while not correct:
                 correct = True
+                bot = False if i == 0 else True
                 answer = self.send_message(f'Создай игрока {i + 1}', 'user')
                 name, role = answer.strip().split()
-                bot = True if i == 0 else False
+                if not bot:
+                    name = input('Введите имя:\n')
                 match role:
                     case 'Мирный':
                         role = Roles.CIVILIAN
@@ -186,7 +193,8 @@ class Game(BaseNeuroObject):
                             'Неправильный формат ответа. Вспомни первое сообщение и отвечай только так, как там сказано. Формат ответа: <имя> <роль>. Два слова на руссокм языке.')
                 player = Player(self, name, True, role, bot)
             self.players.append(player)
-        self.send_message('Больше игроков не будет. ', 'user')
+        all_players = '\n'.join([f'Имя: {player.name} Роль: {player.role},' for player in self.players])
+        self.send_message(f'Больше игроков не будет.\nИтоговый список игроков: {all_players}', 'user')
 
     def night(self):
         answer = self.send_message(prompts.START_NIGHT, temperature=0.1)
@@ -209,24 +217,27 @@ class Game(BaseNeuroObject):
             sheriff = first[0]
             answer = self.send_message('Скажи, что сейчас должен проснуться шериф и проверить роль какого-то игрока. НЕ ПРИДУМЫВАЙ И НЕ ВЫБИРАЙ ИМЁН. Не выходи из роли рассказчика.', temperature=0.2)
             print(f'Ведущий говорит: {answer}')
-            answer = sheriff.send_message(prompts.SHERIFF_WAKE_UP).strip().replace('.', '').split()[-1]
-            print(f'{sheriff.name} говорит: {answer}')
+            # answer = sheriff.send_message(prompts.SHERIFF_WAKE_UP).strip().replace('.', '').split()[-1]
+            answer = sheriff.do_step(prompts.SHERIFF_WAKE_UP).strip().replace('.', '').split()[-1]
+            # print(f'{sheriff.name} говорит: {answer}')
             answer = 'Роль игрока, которого ты проверил:' + self.send_message(f'Скажи роль игрока {answer}.')
-            print(f'Ведущий говорит: {answer}')
+            # print(f'Ведущий говорит: {answer}')
             self.say_to_player(sheriff, answer)
         if second or third:
             don = third[0]
             answer = self.send_message('Скажи, что сейчас должны проснуться мафия и дон. Они должны выбрать какого игрока убить. НЕ ПРИДУМЫВАЙ И НЕ ВЫБИРАЙ ИМЁН. Не выходи из роли рассказчика.', temperature=0.2)
             print(f'Ведущий говорит: {answer}')
             for mafia in second:
-                answer = mafia.send_message(prompts.MAFIA_WAKE_UP)
-                print(f'{mafia.name} говорит: {answer}')
+                # answer = mafia.send_message(prompts.MAFIA_WAKE_UP)
+                answer = mafia.do_step(prompts.MAFIA_WAKE_UP)
+                # print(f'{mafia.name} говорит: {answer}')
                 self.say_to_player(don, answer)
             answer = self.send_message('Скажи, что сейчас дон должен выбрать игрока. НЕ ПРИДУМЫВАЙ И НЕ ВЫБИРАЙ ИМЁН. Не выходи из роли рассказчика.', temperature=0.2)
             print(f'Ведущий говорит: {answer}')
-            answer = don.send_message(prompts.MAFIA_WAKE_UP + '\nТеперь, Дон (ты), должен выбрать, кого убить. Ты можешь согласиться или нет с вариантом из прошлых сообщений. Скажи ТОЛЬКО ОДНО ИМЯ из списка живых игроков.').strip().replace('.', '').split()[-1]
+            # answer = don.send_message(prompts.MAFIA_WAKE_UP + '\nТеперь, Дон (ты), должен выбрать, кого убить. Ты можешь согласиться или нет с вариантом из прошлых сообщений. Скажи ТОЛЬКО ОДНО ИМЯ из списка живых игроков.').strip().replace('.', '').split()[-1]
+            answer = don.do_step(prompts.MAFIA_WAKE_UP + '\nТеперь, Дон (ты), должен выбрать, кого убить. Ты можешь согласиться или нет с вариантом из прошлых сообщений. Скажи ТОЛЬКО ОДНО ИМЯ из списка живых игроков.').strip().replace('.', '').split()[-1]
             target_to_kill = self.find_player_by_name(answer.strip().replace('.', ''))
-            print(f'{don.name} говорит: {answer}')
+            # print(f'{don.name} говорит: {answer}')
             don.say_to_narrator(f'Члены мафии решили убить игрока {answer}')
             target_to_kill.alive = False
 
@@ -237,14 +248,18 @@ class Game(BaseNeuroObject):
         answer = self.send_message(prompts.START_DISCUSSION)
         for player in self.players:
             if player.alive:
-                print(f'{player.name} говорит: {player.send_message(answer, temperature=0.2)}')
+                # print(f'{player.name} говорит: {player.send_message(answer, temperature=0.2)}')
+                answer = player.do_step(answer, temperature=0.2)
+                # print(f'{player.name} говорит: {answer}')
+                self.say_to_all(f'{player.name} говорит: {answer}')
         answer = self.send_message(prompts.START_VOTING)
         print(f'Ведущий говорит: {answer}')
         count_votings = dict([(player.name, 0) for player in self.players])
         for player in self.players:
             if player.alive:
-                name = player.send_message(answer).strip().replace('.', '').split()[-1]
-                print(f'{player.name} говорит: {name}')
+                name = player.do_step(answer).strip().replace('.', '').split()[-1]
+                # print(f'{player.name} говорит: {name}')
+                self.say_to_all(f'{player.name} говорит: {name}')
                 count_votings[name] += 1
         count_votings = sorted(count_votings.items(), key=lambda x: x[1], reverse=True)
         if count_votings[0][1] == count_votings[1][1]:
@@ -281,8 +296,9 @@ class Game(BaseNeuroObject):
         players_status = 'Итак, список всех игроков и их статус. Запомни этот список. В дальнейшем обращайся к игрокам только по их именам.'
         players_status += '\n'.join([f'Имя:{player.name} Живой:{player.alive}' for player in self.players])
         for player in self.players:
-            message = players_status.replace(player.name, f'{player.name} (Ты)')
-            self.say_to_player(player, message)
+            if player.bot:
+                message = players_status.replace(player.name, f'{player.name} (Ты)')
+                self.say_to_player(player, message)
         players_status = 'Итак, список всех игроков и их статус. Запомни этот список. В дальнейшем обращайся к игрокам только по их именам.'
         players_status += '\n'.join(
             [f'Имя:{player.name} Живой:{player.alive} Роль:{player.role}' for player in self.players])
