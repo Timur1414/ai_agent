@@ -107,7 +107,7 @@ class Player(BaseNeuroObject):
         if self.bot:
             return self.send_message(message, **kwargs)
         else:
-            return input()
+            return input('Введите сообщение:\n')
 
     def __str__(self):
         return f'Я {self.name}. Моя роль - {self.role}'
