@@ -6,6 +6,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import prompts
 import logging
+import socket
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +58,14 @@ class BaseNeuroObject(ABC):
 
 
 class Player(BaseNeuroObject):
-    def __init__(self, game, name: str = '', alive: bool = True, role: int = 0, bot: bool = False):
+    def __init__(self, game, name: str = '', alive: bool = True, role: int = 0, bot: bool = False, conn: socket.socket = None):
         super().__init__()
         self.game = game
         self.alive = alive
         self.role = role
         self.bot = bot
         self.name = name
+        self.conn = conn
         if bot:
             self.send_message(prompts.START + prompts.ROLES, role='system')
             self.send_message(prompts.BOT_RULES.format(name=self.name.upper(), role=self.role), role='system')
@@ -84,6 +86,8 @@ class Player(BaseNeuroObject):
                 'content': message
             }
         )
+        message = f'Говорит {self.name}: {message}'
+        self.conn.sendall(message.encode())
 
     def say_to_narrator(self, message: str):
         message = f'Говорит {self.name}: {message}'
@@ -100,21 +104,29 @@ class Player(BaseNeuroObject):
                 'Теперь представься, расскажи о себе другим игрокам так, чтобы они не узнали твою роль, но при этом, '
                 'чтобы они доверяли тебе. Расскажи ту информацию о своей личности, которую считаешь нужной.', presence_penalty=0.7, temperature=0.2)
         else:
-            answer = input('Представьтесь и расскажите о себе:\n')
+            # answer = input('Представьтесь и расскажите о себе:\n')
+            message = 'Представьтесь и расскажите о себе:\n' + ' need_response'
+            self.conn.sendall(message.encode())
+            answer = self.conn.recv(1024).decode()
         self.say_to_all(answer)
 
     def do_step(self, message, **kwargs) -> str:
         if self.bot:
             return self.send_message(message, **kwargs)
         else:
-            return input('Введите сообщение:\n')
+            message = 'Введите сообщение:\n' + ' need_response'
+            self.conn.sendall(message.encode())
+            answer = self.conn.recv(1024).decode()
+            return answer
 
     def __str__(self):
         return f'Я {self.name}. Моя роль - {self.role}'
 
 
 class Game(BaseNeuroObject):
-    def __init__(self):
+    def __init__(self, server, conn):
+        self.server: socket.socket = server
+        self.conn: socket.socket = conn
         torch.manual_seed(random.randint(0, 50))
         super().__init__()
         self.players = []
@@ -167,6 +179,7 @@ class Game(BaseNeuroObject):
 
     def choose_roles(self):
         print('start choose roles')
+        self.conn.send(b'start choose roles')
         self.send_message(prompts.CHOOSE_ROLES, 'user')
         for i in range(self.players_count):
             correct = False
@@ -177,7 +190,10 @@ class Game(BaseNeuroObject):
                 answer = self.send_message(f'Создай игрока {i + 1}', 'user')
                 name, role = answer.strip().split()
                 if not bot:
-                    name = input('Введите имя:\n')
+                    # name = input('Введите имя:\n')
+                    message = 'Введите имя:' + ' need_response'
+                    self.conn.sendall(message.encode())
+                    name = self.conn.recv(1024)
                 match role:
                     case 'Мирный':
                         role = Roles.CIVILIAN
@@ -191,7 +207,7 @@ class Game(BaseNeuroObject):
                         correct = False
                         self.send_message(
                             'Неправильный формат ответа. Вспомни первое сообщение и отвечай только так, как там сказано. Формат ответа: <имя> <роль>. Два слова на руссокм языке.')
-                player = Player(self, name, True, role, bot)
+                player = Player(self, name, True, role, bot, self.conn if not bot else None)
             self.players.append(player)
         all_players = '\n'.join([f'Имя: {player.name} Роль: {player.role},' for player in self.players])
         self.send_message(f'Больше игроков не будет.\nИтоговый список игроков: {all_players}', 'user')
@@ -199,6 +215,8 @@ class Game(BaseNeuroObject):
     def night(self):
         answer = self.send_message(prompts.START_NIGHT, temperature=0.1)
         print(f'Ведущий: {answer}')
+        message = f'Ведущий: {answer}'
+        self.conn.sendall(message.encode())
         '''
         Выбор порядка ходом можно строго задать алгоритмом, а можно сгенерировать нейронкой???
         '''
@@ -308,6 +326,9 @@ class Game(BaseNeuroObject):
         answer = self.send_message('Скажи, кто победил? Мирные или мафия?', temperature=0.3)
         print(f'Ведущий говорит: {answer}')
         torch.cuda.empty_cache()
+        message = f'Ведущий говорит: {answer}'
+        self.conn.sendall(message.encode())
+        self.conn.sendall(b'end')
 
     def start_game(self):
         print('start start game')
@@ -325,10 +346,21 @@ class Game(BaseNeuroObject):
 
 
 def main():
+    host = '127.0.0.1'
+    port = 8888
+    buf_size = 1024
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((host, port))
+    server.listen()
+    conn, addr = server.accept()
+
     logging_format = '%(asctime)s %(levelname)s %(message)s'
     logging.basicConfig(filename='log.log', filemode='w', encoding='utf-8', level=logging.INFO, format=logging_format)
-    game = Game()
+    game = Game(server, conn)
     game.start_game()
+
+    conn.close()
+    server.close()
 
 
 if __name__ == '__main__':
