@@ -1,8 +1,8 @@
 import os
 from abc import ABC
 import random
-import torch
 from openai import OpenAI
+# from huggingface_hub import InferenceClient
 from dotenv import load_dotenv
 import prompts
 import logging
@@ -26,6 +26,10 @@ class BaseNeuroObject(ABC):
             base_url=url,
             api_key=api_key,
         )
+        # self.client = InferenceClient(
+        #     provider='auto',
+        #     api_key=api_key,
+        # )
         self.model = os.environ.get('MODEL')
         self.memory = []
 
@@ -112,7 +116,6 @@ class Player(BaseNeuroObject):
 
 class Game(BaseNeuroObject):
     def __init__(self, players_count):
-        torch.manual_seed(random.randint(0, 50))
         super().__init__()
         self.players = []
         self.end = False
@@ -188,7 +191,7 @@ class Game(BaseNeuroObject):
                     case _:
                         correct = False
                         self.send_message(
-                            'Неправильный формат ответа. Вспомни первое сообщение и отвечай только так, как там сказано. Формат ответа: <имя> <роль>. Два слова на руссокм языке.')
+                            'Неправильный формат ответа. Вспомни первое сообщение и отвечай только так, как там сказано. Формат ответа: <имя> <роль>. Два слова на русском языке.')
                 player = Player(self, name, True, role, bot)
             self.players.append(player)
         all_players = '\n'.join([f'Имя: {player.name} Роль: {player.role},' for player in self.players])
@@ -204,7 +207,7 @@ class Game(BaseNeuroObject):
         if first_order:
             sheriff = first_order[0]
             answer = self.send_message('Скажи, что сейчас должен проснуться шериф и проверить роль какого-то игрока. НЕ ПРИДУМЫВАЙ И НЕ ВЫБИРАЙ ИМЁН. Не выходи из роли рассказчика.', temperature=0.2)
-            # print(f'Ведущий говорит: {answer}')
+            print(f'Ведущий говорит: {answer}')
             answer = sheriff.do_step(prompts.SHERIFF_WAKE_UP).strip().replace('.', '').split()[-1]
             answer = 'Роль игрока, которого ты проверил:' + self.send_message(f'Скажи роль игрока {answer}.')
             self.say_to_player(sheriff, answer)
@@ -282,7 +285,6 @@ class Game(BaseNeuroObject):
     def end_game(self):
         answer = self.send_message('Скажи, кто победил? Мирные или мафия? Ответь более подробно.', temperature=0.3)
         print(f'Ведущий говорит: {answer}')
-        torch.cuda.empty_cache()
 
     def start_game(self):
         print('start start game')
